@@ -341,6 +341,9 @@ class DependencyDetector(object):
             dirent = segments.pop(0)
             if isinstance(tree_or_blob, pygit2.Tree):
                 if dirent in tree_or_blob:
+                    # OID for submodule is actual commit in original repo
+                    if not tree_or_blob[dirent].oid in self.repo:
+                        return None
                     tree_or_blob = self.repo[tree_or_blob[dirent].oid]
                     # self.logger.debug("  %s in %s" % (dirent, path))
                     if path:
