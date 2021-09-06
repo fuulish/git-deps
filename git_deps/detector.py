@@ -118,6 +118,8 @@ class DependencyDetector(object):
 
             self.notify_listeners('new_commit', dependent)
 
+            if not len(dependent.parents):
+                continue
             parent = dependent.parents[0]
             self.find_dependencies_with_parent(dependent, parent)
             self.done.append(dependent_sha1)
