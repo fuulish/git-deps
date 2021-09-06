@@ -8,6 +8,9 @@ from git_deps.gitutils import GitUtils
 from git_deps.listener.base import DependencyListener
 from git_deps.errors import InvalidCommitish
 
+from collections import namedtuple
+
+TreeOrBlob = namedtuple('TreeOrBlob', ['is_submodule', 'ID'])
 
 class DependencyDetector(object):
     """Class for automatically detecting dependencies between git
@@ -160,24 +163,33 @@ class DependencyDetector(object):
         self.logger.info("        Blaming hunk %s @ %s (listed below)" %
                          (line_range_before, parent.hex[:8]))
 
-        if not self.tree_lookup(path, parent):
+        tree_or_blob = self.tree_lookup(path, parent)
+        if not tree_or_blob:
             # This is probably because dependent added a new directory
             # which was not previously in the parent.
             return
 
-        blame = self.run_blame(hunk, parent, path)
-
         dependent_sha1 = dependent.hex
         self.register_new_dependent(dependent, dependent_sha1)
 
-        line_to_culprit = {}
+        if tree_or_blob.is_submodule:
+            blame = self.run_log(parent, path)
+            dependency_sha1 = blame
+            dependency = self.get_commit(dependency_sha1)
+            self.process_new_dependency(dependent, dependent_sha1,
+                                        dependency, dependency_sha1,
+                                        path, 1)
+        else:
+            blame = self.run_blame(hunk, parent, path)
 
-        for line in blame.split('\n'):
-            self.process_hunk_line(dependent, dependent_sha1, parent,
-                                   path, line, line_to_culprit)
+            line_to_culprit = {}
 
-        self.debug_hunk(line_range_before, line_range_after, hunk,
-                        line_to_culprit)
+            for line in blame.split('\n'):
+                self.process_hunk_line(dependent, dependent_sha1, parent,
+                                       path, line, line_to_culprit)
+
+            self.debug_hunk(line_range_before, line_range_after, hunk,
+                            line_to_culprit)
 
     def process_hunk_line(self, dependent, dependent_sha1, parent,
                           path, line, line_to_culprit):
@@ -232,6 +244,14 @@ class DependencyDetector(object):
                              GitUtils.commit_summary(dependent))
             self.dependencies[dependent_sha1] = {}
             self.notify_listeners("new_dependent", dependent)
+
+    def run_log(self, parent, path):
+        cmd = [
+            'git', 'log', '-n1',
+            '--pretty=format:%H',
+            parent.hex, '--', path
+                ]
+        return subprocess.check_output(cmd, universal_newlines=True)
 
     def run_blame(self, hunk, parent, path):
         cmd = [
@@ -345,7 +365,7 @@ class DependencyDetector(object):
                 if dirent in tree_or_blob:
                     # OID for submodule is actual commit in original repo
                     if not tree_or_blob[dirent].oid in self.repo:
-                        return None
+                        return TreeOrBlob(True, tree_or_blob)
                     tree_or_blob = self.repo[tree_or_blob[dirent].oid]
                     # self.logger.debug("  %s in %s" % (dirent, path))
                     if path:
@@ -361,7 +381,7 @@ class DependencyDetector(object):
                 self.logger.debug("        %s not a tree in %s" %
                                   (tree_or_blob, commit.hex[:8]))
                 return None
-        return tree_or_blob
+        return TreeOrBlob(False, tree_or_blob)
 
     def edges(self):
         return [
